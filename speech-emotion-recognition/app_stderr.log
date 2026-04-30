@@ -1,0 +1,5 @@
+2026-04-30 23:04:44,310 INFO [httpx] HTTP Request: GET http://127.0.0.1:7860/gradio_api/startup-events "HTTP/1.1 200 OK"
+2026-04-30 23:04:44,392 INFO [httpx] HTTP Request: HEAD https://huggingface.co/api/telemetry/https%3A/api.gradio.app/gradio-initiated-analytics "HTTP/1.1 200 OK"
+2026-04-30 23:04:44,460 INFO [httpx] HTTP Request: HEAD http://127.0.0.1:7860/ "HTTP/1.1 200 OK"
+2026-04-30 23:04:44,763 INFO [httpx] HTTP Request: HEAD https://huggingface.co/api/telemetry/https%3A/api.gradio.app/gradio-launched-telemetry "HTTP/1.1 200 OK"
+2026-04-30 23:04:45,142 INFO [httpx] HTTP Request: GET https://api.gradio.app/pkg-version "HTTP/1.1 200 OK"
