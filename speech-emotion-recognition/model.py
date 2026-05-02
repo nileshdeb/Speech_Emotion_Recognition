@@ -8,16 +8,18 @@ import numpy as np
 import torch
 from transformers import AutoFeatureExtractor, AutoModelForAudioClassification
 
-from config import EMOTION_EMOJI, MAX_AUDIO_LENGTH, MAX_DURATION_SECONDS, MODEL_ID, SAMPLE_RATE
+from config import CANONICAL_EMOTIONS, EMOTION_EMOJI, MAX_AUDIO_LENGTH, MAX_DURATION_SECONDS, MODEL_ID, SAMPLE_RATE
 
 
 logger = logging.getLogger(__name__)
 
 
 class PredictionResult(TypedDict):
-    emotion: str
+    top_emotion: str
     confidence: float
     all_scores: dict[str, float]
+    whisper_scores: dict[str, float] | None
+    wav2vec_scores: dict[str, float] | None
 
 
 class ErrorResult(TypedDict):
@@ -90,6 +92,26 @@ class SpeechEmotionRecognizer:
             logger.exception("Audio preprocessing failed for '%s'", audio_path)
             raise RuntimeError(f"Failed to preprocess audio '{audio_path}': {exc}") from exc
 
+    def _predict_whisper(self, audio_array: np.ndarray) -> dict[str, float]:
+        inputs = self.feature_extractor(
+            audio_array,
+            sampling_rate=self.SAMPLE_RATE,
+            return_tensors="pt",
+        )
+        inputs = {name: tensor.to(self.device) for name, tensor in inputs.items()}
+
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+
+        probabilities = torch.softmax(outputs.logits, dim=-1)[0]
+        scores = {
+            self.model.config.id2label[i]: float(p) 
+            for i, p in enumerate(probabilities.tolist())
+        }
+        if "calm" not in scores:
+            scores["calm"] = 0.0
+        return scores
+
     def predict(self, audio_path: str) -> PredictionResponse:
         if self.initialization_error:
             logger.warning("Prediction requested while model is unavailable: %s", self.initialization_error)
@@ -102,38 +124,40 @@ class SpeechEmotionRecognizer:
         try:
             logger.info("Running prediction for audio file: %s", audio_path)
             audio_array = self.preprocess_audio(audio_path)
-            inputs = self.feature_extractor(
-                audio_array,
-                sampling_rate=self.SAMPLE_RATE,
-                return_tensors="pt",
-            )
-            inputs = {name: tensor.to(self.device) for name, tensor in inputs.items()}
 
-            with torch.no_grad():
-                outputs = self.model(**inputs)
+            whisper_scores = None
+            try:
+                whisper_scores = self._predict_whisper(audio_array)
+                logger.debug("Whisper scores for '%s': %s", audio_path, whisper_scores)
+            except Exception as exc:
+                logger.warning("Whisper prediction failed for '%s': %s", audio_path, exc)
 
-            probabilities = torch.softmax(outputs.logits, dim=-1)[0]
-            predicted_index = int(torch.argmax(probabilities).item())
-            predicted_emotion = self.id2label[predicted_index]
+            if whisper_scores is None:
+                raise RuntimeError("Whisper prediction failed")
+
+            fused_scores = whisper_scores
+            logger.info("Using Whisper scores for '%s'", audio_path)
+
             sorted_scores = sorted(
-                (
-                    (self.id2label[index], float(score))
-                    for index, score in enumerate(probabilities.tolist())
-                ),
+                fused_scores.items(),
                 key=lambda item: item[1],
                 reverse=True,
             )
+            top_emotion = sorted_scores[0][0]
+            confidence = float(sorted_scores[0][1])
 
             result: PredictionResult = {
-                "emotion": predicted_emotion,
-                "confidence": float(probabilities[predicted_index].item()),
+                "top_emotion": top_emotion,
+                "confidence": confidence,
                 "all_scores": dict(sorted_scores),
+                "whisper_scores": whisper_scores,
+                "wav2vec_scores": None,
             }
             logger.info(
                 "Prediction completed for '%s': emotion=%s confidence=%.4f",
                 audio_path,
-                predicted_emotion,
-                result["confidence"],
+                top_emotion,
+                confidence,
             )
             return result
         except Exception as exc:

@@ -52,7 +52,7 @@ def safe_console_text(text: str) -> str:
 
 
 def validate_prediction_result(result: dict[str, Any]) -> tuple[bool, str]:
-    required_keys = {"emotion", "confidence", "all_scores"}
+    required_keys = {"top_emotion", "confidence", "all_scores"}
     if not required_keys.issubset(result):
         missing = ", ".join(sorted(required_keys - set(result)))
         return False, f"missing keys: {missing}"
@@ -77,7 +77,7 @@ def validate_prediction_result(result: dict[str, Any]) -> tuple[bool, str]:
 
 
 def print_prediction(result: dict[str, Any], recognizer: SpeechEmotionRecognizer) -> None:
-    emotion = str(result["emotion"])
+    emotion = str(result["top_emotion"])
     confidence = float(result["confidence"])
     emoji = recognizer.emoji_map.get(emotion.lower(), "N/A")
     display_emoji = safe_console_text(emoji)
@@ -127,6 +127,49 @@ def run_test_case(
     return True, reason
 
 
+def test_both_models_loaded(recognizer: SpeechEmotionRecognizer) -> tuple[bool, str]:
+    print("\n=== Both models loaded ===")
+    if recognizer.model is None:
+        return False, "Whisper model is None"
+    if recognizer.feature_extractor is None:
+        return False, "Whisper feature extractor is None"
+    if recognizer.wav2vec_model is None:
+        return False, "Wav2Vec2 model is None"
+    if recognizer.wav2vec_feature_extractor is None:
+        return False, "Wav2Vec2 feature extractor is None"
+    return True, "Both models loaded successfully"
+
+
+def test_fused_prediction_output_structure(
+    recognizer: SpeechEmotionRecognizer, output_dir: Path
+) -> tuple[bool, str]:
+    print("\n=== Fused prediction output structure ===")
+    path = output_dir / "test_audio_fused.wav"
+    audio = generate_sine_wave(3.0)
+    sf.write(path, audio, SAMPLE_RATE)
+
+    result = recognizer.predict(str(path))
+    if "error" in result:
+        return False, result["error"]
+
+    if "whisper_scores" not in result:
+        return False, "missing key: whisper_scores"
+    if "wav2vec_scores" not in result:
+        return False, "missing key: wav2vec_scores"
+
+    all_scores = result.get("all_scores", {})
+    if len(all_scores) != 8:
+        return False, f"all_scores has {len(all_scores)} emotions instead of 8"
+
+    confidence = result.get("confidence")
+    if not isinstance(confidence, (int, float)):
+        return False, "confidence is not numeric"
+    if not 0.0 <= float(confidence) <= 1.0:
+        return False, "confidence is outside the range 0 to 1"
+
+    return True, "Fused output structure valid"
+
+
 def main() -> None:
     output_dir = Path(__file__).resolve().parent
     recognizer = SpeechEmotionRecognizer()
@@ -143,6 +186,16 @@ def main() -> None:
         status = "PASS" if passed else "FAIL"
         print(f"Result            : {status} - {reason}")
         results.append((name, passed, reason))
+
+    passed, reason = test_both_models_loaded(recognizer)
+    status = "PASS" if passed else "FAIL"
+    print(f"Result            : {status} - {reason}")
+    results.append(("Both models loaded", passed, reason))
+
+    passed, reason = test_fused_prediction_output_structure(recognizer, output_dir)
+    status = "PASS" if passed else "FAIL"
+    print(f"Result            : {status} - {reason}")
+    results.append(("Fused prediction output structure", passed, reason))
 
     total_passed = sum(1 for _, passed, _ in results if passed)
     print("\n=== Summary ===")

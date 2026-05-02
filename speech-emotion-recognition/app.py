@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import sys
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+import os
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+os.environ["HF_TOKEN"] = ""
+
 import html
 import logging
 
@@ -94,24 +104,27 @@ def build_error_response(message: str) -> tuple[str, dict[str, float], str]:
     return error_markdown, {}, error_chart
 
 
-def detect_emotion(audio_path: str | None) -> tuple[str, dict[str, float], str]:
+def detect_emotion(audio_path: str | None) -> tuple[str, dict[str, float], str, str]:
     if not audio_path:
-        return build_error_response("Please record audio or upload a file before detecting emotion.")
+        md, scores, chart = build_error_response("Please record audio or upload a file before detecting emotion.")
+        return md, scores, chart, ""
 
     try:
         recognizer = get_recognizer()
         result = recognizer.predict(audio_path)
     except Exception:
         logger.exception("Unexpected error while preparing the recognizer")
-        return build_error_response("Something went wrong while preparing the model. Please try again.")
+        md, scores, chart = build_error_response("Something went wrong while preparing the model. Please try again.")
+        return md, scores, chart, ""
 
     if "error" in result:
         logger.warning("Prediction returned an error for '%s': %s", audio_path, result["error"])
-        return build_error_response(
+        md, scores, chart = build_error_response(
             "We couldn't analyze that audio right now. Please verify the file and try again."
         )
+        return md, scores, chart, ""
 
-    emotion = str(result["emotion"])
+    emotion = str(result["top_emotion"])
     confidence = float(result["confidence"])
     all_scores = {
         label: float(score)
@@ -119,16 +132,28 @@ def detect_emotion(audio_path: str | None) -> tuple[str, dict[str, float], str]:
     }
     emoji = recognizer.emoji_map.get(emotion.lower(), EMOTION_EMOJI.get("neutral", "\U0001F3B5"))
 
+    whisper_scores = result.get("whisper_scores")
+    wav2vec_scores = result.get("wav2vec_scores")
+
+    def _format_scores(scores: dict[str, float] | None) -> str:
+        if scores is None:
+            return "Model unavailable"
+        items = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        return " | ".join(f"{emo.title()}={score * 100:.1f}%" for emo, score in items)
+
+    debug_text = f"🎙️ Whisper: {_format_scores(whisper_scores)}\n🌊 Wav2Vec2: Not used"
+
     return (
         format_result_markdown(emotion, confidence, emoji),
         all_scores,
         render_emotion_chart(all_scores),
+        debug_text,
     )
 
 
 def initialize_app(progress: gr.Progress = gr.Progress()) -> str:
     progress(0.0, desc="Starting application...")
-    progress(0.25, desc=f"Preparing model: {MODEL_ID}")
+    progress(0.25, desc="Loading 2 models (Whisper + Wav2Vec2)...")
     recognizer = get_recognizer()
     progress(0.9, desc="Finalizing startup...")
 
@@ -171,10 +196,13 @@ with gr.Blocks(title="Speech Emotion Recognition") as demo:
     scores_label = gr.Label(label="Emotion Confidence Scores", num_top_classes=8)
     chart_html = gr.HTML(value=render_emotion_chart({}))
 
+    with gr.Accordion("🔍 Model Details (Debug)", open=False):
+        debug_textbox = gr.Textbox(label="", lines=2)
+
     detect_button.click(
         fn=detect_emotion,
         inputs=audio_input,
-        outputs=[result_markdown, scores_label, chart_html],
+        outputs=[result_markdown, scores_label, chart_html, debug_textbox],
         show_progress="full",
     )
     demo.load(
