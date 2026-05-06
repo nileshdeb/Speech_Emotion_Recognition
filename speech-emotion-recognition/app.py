@@ -133,15 +133,13 @@ def detect_emotion(audio_path: str | None) -> tuple[str, dict[str, float], str, 
     emoji = recognizer.emoji_map.get(emotion.lower(), EMOTION_EMOJI.get("neutral", "\U0001F3B5"))
 
     whisper_scores = result.get("whisper_scores")
-    wav2vec_scores = result.get("wav2vec_scores")
-
     def _format_scores(scores: dict[str, float] | None) -> str:
         if scores is None:
             return "Model unavailable"
         items = sorted(scores.items(), key=lambda x: x[1], reverse=True)
         return " | ".join(f"{emo.title()}={score * 100:.1f}%" for emo, score in items)
 
-    debug_text = f"🎙️ Whisper: {_format_scores(whisper_scores)}\n🌊 Wav2Vec2: Not used"
+    debug_text = f"🎙️ Whisper: {_format_scores(whisper_scores)}"
 
     return (
         format_result_markdown(emotion, confidence, emoji),
@@ -153,7 +151,7 @@ def detect_emotion(audio_path: str | None) -> tuple[str, dict[str, float], str, 
 
 def initialize_app(progress: gr.Progress = gr.Progress()) -> str:
     progress(0.0, desc="Starting application...")
-    progress(0.25, desc="Loading 2 models (Whisper + Wav2Vec2)...")
+    progress(0.25, desc="Loading Whisper model...")
     recognizer = get_recognizer()
     progress(0.9, desc="Finalizing startup...")
 
@@ -196,7 +194,7 @@ with gr.Blocks(title="Speech Emotion Recognition") as demo:
     scores_label = gr.Label(label="Emotion Confidence Scores", num_top_classes=8)
     chart_html = gr.HTML(value=render_emotion_chart({}))
 
-    with gr.Accordion("🔍 Model Details (Debug)", open=False):
+    with gr.Accordion("🎙️ Whisper Model Scores", open=False):
         debug_textbox = gr.Textbox(label="", lines=2)
 
     detect_button.click(
