@@ -12,11 +12,13 @@ os.environ["HF_TOKEN"] = ""
 
 import html
 import logging
+import socket
 
 import gradio as gr
 
 from config import EMOTION_COLORS, EMOTION_EMOJI, MODEL_ID
 from model import SpeechEmotionRecognizer
+from voice_feedback import speak_emotion
 
 
 logging.basicConfig(
@@ -141,6 +143,12 @@ def detect_emotion(audio_path: str | None) -> tuple[str, dict[str, float], str, 
 
     debug_text = f"🎙️ Whisper: {_format_scores(whisper_scores)}"
 
+    # ── AI Voice Feedback ──────────────────────────────────────────────────
+    # Speak an empathetic message out loud matching the detected emotion.
+    # Runs in a background thread so the UI is never blocked.
+    speak_emotion(emotion)
+    # ──────────────────────────────────────────────────────────────────────
+
     return (
         format_result_markdown(emotion, confidence, emoji),
         all_scores,
@@ -165,6 +173,19 @@ def initialize_app(progress: gr.Progress = gr.Progress()) -> str:
 
     progress(1.0, desc="Ready")
     return build_status_message("Model loaded successfully. You can record or upload audio now.")
+
+
+def pick_server_port() -> int:
+    requested_port = int(os.getenv("GRADIO_SERVER_PORT", "7860"))
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as requested_socket:
+        requested_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if requested_socket.connect_ex(("127.0.0.1", requested_port)) != 0:
+            return requested_port
+
+    # Fall back to any free ephemeral port if the preferred port is busy.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as fallback_socket:
+        fallback_socket.bind(("127.0.0.1", 0))
+        return int(fallback_socket.getsockname()[1])
 
 
 with gr.Blocks(title="Speech Emotion Recognition") as demo:
@@ -212,4 +233,11 @@ with gr.Blocks(title="Speech Emotion Recognition") as demo:
 
 
 if __name__ == "__main__":
-    demo.queue().launch(share=False, server_port=7860)
+    server_port = pick_server_port()
+    if server_port != int(os.getenv("GRADIO_SERVER_PORT", "7860")):
+        logger.warning(
+            "Port %s is busy, launching Gradio on fallback port %s.",
+            os.getenv("GRADIO_SERVER_PORT", "7860"),
+            server_port,
+        )
+    demo.queue().launch(share=False, server_port=server_port)

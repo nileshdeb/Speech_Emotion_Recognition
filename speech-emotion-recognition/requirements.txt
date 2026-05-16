@@ -7,3 +7,4 @@ gradio
 numpy
 pyaudio
 speechbrain
+pyttsx3
